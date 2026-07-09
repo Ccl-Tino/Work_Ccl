@@ -193,6 +193,11 @@ mark{background:#FAC775;color:#412402;border-radius:2px;padding:0 1px}
 .sheet-close{width:100%;text-align:center;padding:13px;font-size:15px;color:var(--text2);margin-top:4px}
 .usage{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin:8px 0 4px}
 .usage-fill{height:100%;background:var(--wait)}
+.mark-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.mark-option{display:flex;align-items:center;gap:10px;text-align:left;padding:12px 13px;border-radius:11px;
+  border:.5px solid var(--border);background:var(--surface2);font-size:14px;color:var(--text)}
+.mark-option.on{border-color:var(--wait);box-shadow:0 0 0 1px var(--wait) inset;font-weight:600}
+.mark-swatch{width:28px;height:28px;border-radius:8px;border:.5px solid var(--border2);flex-shrink:0}
 
 .imgmodal{position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:60;display:flex;align-items:center;justify-content:center;padding:20px}
 .imgmodal img{max-width:100%;max-height:100%;border-radius:8px}
@@ -243,14 +248,23 @@ var SC={
 var DW=["日","一","二","三","四","五","六"];
 var FONT={small:{label:"小"},normal:{label:"中"},large:{label:"大"}};
 var FONT_ORDER=["small","normal","large"];
+var MARKS={
+  yellow:{label:"重点关注",bg:"#FFF4B8",bd:"#E1B948"},
+  orange:{label:"提醒事项",bg:"#FFE2BF",bd:"#D68A2D"},
+  red:{label:"紧急关注",bg:"#FFD6D2",bd:"#D34A3F"},
+  blue:{label:"会议安排",bg:"#DDEEFF",bd:"#378ADD"},
+  green:{label:"现场跟进",bg:"#DDF4E9",bd:"#1D9E75"},
+  purple:{label:"特别事项",bg:"#E9DFFF",bd:"#7A4CC2"}
+};
+var MARK_ORDER=["yellow","orange","red","blue","green","purple"];
 
 var state={
   entries:{}, view:"cal", sel:today(), ym:today().slice(0,7),
   draft:"", draftHTML:"", draftProj:"", draftStat:"done", autoDetect:true,
   draftRef:"", draftPhoto:"", draftSize:"normal", editId:null, editorRange:null,
   searchQ:"", showArchived:false, carry:[], showCarry:false,
-  sheet:false, modalImg:"",
-  editStatus:null
+  sheet:false, markSheet:false, modalImg:"",
+  editStatus:null, dayMarks:{}
 };
 
 function today(){return new Date().toISOString().slice(0,10);}
@@ -324,9 +338,10 @@ function migrate(){
   });
   if(changed)save();
 }
-function load(){try{var r=localStorage.getItem(KEY);if(r){var d=JSON.parse(r);state.entries=d.entries||{};}}catch(e){}migrate();}
-function save(){try{localStorage.setItem(KEY,JSON.stringify({entries:state.entries}));}catch(e){alert("保存失败，存储空间可能已满。建议在设置里导出备份，并清理一些旧的图片附件。");}}
-function storageBytes(){try{return new Blob([JSON.stringify({entries:state.entries})]).size;}catch(e){return 0;}}
+function dataPack(){return {entries:state.entries,dayMarks:state.dayMarks};}
+function load(){try{var r=localStorage.getItem(KEY);if(r){var d=JSON.parse(r);state.entries=d.entries||{};state.dayMarks=d.dayMarks||{};}}catch(e){}migrate();}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(dataPack()));}catch(e){alert("保存失败，存储空间可能已满。建议在设置里导出备份，并清理一些旧的图片附件。");}}
+function storageBytes(){try{return new Blob([JSON.stringify(dataPack())]).size;}catch(e){return 0;}}
 
 function allPending(){
   var out=[];
@@ -352,6 +367,17 @@ function dayColor(ds){
   if(es.some(function(e){return curStatus(e)!=="done";}))return "#EF9F27";
   return "#1D9E75";
 }
+function cleanMark(m){return MARKS[m]?m:"";}
+function markStyle(m){
+  m=cleanMark(m);if(!m)return "";
+  return "background:"+MARKS[m].bg+";border-color:"+MARKS[m].bd+";";
+}
+function setDayMark(m){
+  m=cleanMark(m);
+  if(m)state.dayMarks[state.sel]=m;
+  else delete state.dayMarks[state.sel];
+  state.markSheet=false;save();render();
+}
 function hl(text,q){if(!q)return esc(text);return text.split(q).map(esc).join("<mark>"+esc(q)+"</mark>");}
 
 /* attachments */
@@ -373,7 +399,8 @@ function compressImage(file,cb){
 
 /* export / import */
 function doExport(){
-  var blob=new Blob([JSON.stringify({entries:state.entries,exportedAt:new Date().toISOString()},null,0)],{type:"application/json"});
+  var data=dataPack();data.exportedAt=new Date().toISOString();
+  var blob=new Blob([JSON.stringify(data,null,0)],{type:"application/json"});
   var url=URL.createObjectURL(blob);
   var a=document.createElement("a");
   a.href=url;a.download="工作日志备份-"+today()+".json";
@@ -394,6 +421,7 @@ function doImport(file){
         d.entries[date].forEach(function(e){if(!ids[e.id])ex.push(e);});
         state.entries[date]=ex;
       });
+      if(d.dayMarks)Object.keys(d.dayMarks).forEach(function(date){state.dayMarks[date]=d.dayMarks[date];});
       save();state.sheet=false;render();
       alert("导入完成！");
     }catch(e){alert("读取失败："+e.message);}
@@ -599,6 +627,8 @@ function render(){
   if(v==="cal"&&pendN>0)h+='<span class="badge">'+pendN+' 待处理</span>';
   h+='</div><div class="hdr-r">';
   if(v==="day"){
+    var mk=cleanMark(state.dayMarks[state.sel]);
+    h+='<button class="tbtn" data-act="markDay"'+(mk?' style="'+markStyle(mk)+'color:var(--text);border-color:'+MARKS[mk].bd+'"':'')+'>标记颜色</button>';
     var dv=(state.entries[state.sel]||[]).filter(function(e){return !e.archived&&curStatus(e)==="done";}).length;
     if(dv>0)h+='<button class="tbtn" data-act="archAll" style="background:var(--done-bg);color:var(--done-tc);border-color:var(--done)">归档完成('+dv+')</button>';
   }
@@ -615,6 +645,7 @@ function render(){
   else if(v==="search")h+=renderSearch();
   h+='</div>';
   if(state.sheet)h+=renderSheet();
+  if(state.markSheet)h+=renderMarkSheet();
   if(state.modalImg)h+='<div class="imgmodal" data-act="closeImg"><img src="'+state.modalImg+'"></div>';
   if(state.editStatus)h+=renderStatusEdit();
   document.getElementById("app").innerHTML=h;
@@ -647,11 +678,12 @@ function renderCal(){
   for(var day=1;day<=dim;day++){
     var ds=y+"-"+("0"+m).slice(-2)+"-"+("0"+day).slice(-2);
     var c=dayColor(ds),isT=ds===today();
+    var mark=cleanMark(state.dayMarks[ds]);
     var all=state.entries[ds]||[];
     var act=all.filter(function(e){return !e.archived;});
     var arch=all.filter(function(e){return e.archived;});
-    var pre=act[0]?act[0].text.slice(0,14):(arch.length?"已归档 "+arch.length+" 条":"");
-    h+='<div class="cell'+(isT?" today":"")+'" data-act="day" data-d="'+ds+'"><div class="cell-top"><span class="cell-num">'+day+'</span>'+(c?'<span class="dot" style="background:'+c+'"></span>':'')+'</div>';
+    var pre=act[0]?act[0].text.slice(0,14):(arch.length?"已归档 "+arch.length+" 条":(mark?MARKS[mark].label:""));
+    h+='<div class="cell'+(isT?" today":"")+'" data-act="day" data-d="'+ds+'"'+(mark?' style="'+markStyle(mark)+'"':'')+'><div class="cell-top"><span class="cell-num">'+day+'</span>'+(c?'<span class="dot" style="background:'+c+'"></span>':'')+'</div>';
     if(pre)h+='<div class="cell-pre">'+esc(pre)+'</div>';
     if(act.length>1)h+='<div class="cell-more">+'+(act.length-1)+'条</div>';
     else if(!act.length&&arch.length>1)h+='<div class="cell-more">归档</div>';
@@ -825,17 +857,39 @@ function renderSheet(){
   return h;
 }
 
+function renderMarkSheet(){
+  var cur=cleanMark(state.dayMarks[state.sel]);
+  var h='<div class="sheet" data-act="markBg"><div class="sheet-inner" data-stop="1">';
+  h+='<div class="sheet-title">标记这一天</div>';
+  h+='<div class="sheet-sub">给 '+fmtFull(state.sel)+' 的日历格加一个底色，用来提醒特别需要关注的日子。</div>';
+  h+='<div class="mark-grid">';
+  MARK_ORDER.forEach(function(k){
+    var m=MARKS[k];
+    h+='<button class="mark-option'+(cur===k?" on":"")+'" data-act="markPick" data-mark="'+k+'"><span class="mark-swatch" style="background:'+m.bg+';border-color:'+m.bd+'"></span>'+m.label+'</button>';
+  });
+  h+='</div>';
+  h+='<button class="sheet-btn" data-act="markClear"><span class="mark-swatch" style="background:var(--surface);border-style:dashed"></span>清除标记<small>恢复普通底色</small></button>';
+  h+='<div class="sheet-close" data-act="markClose">关闭</div>';
+  h+='</div></div>';
+  return h;
+}
+
 /* bind */
 function bind(){
   document.querySelectorAll("[data-act]").forEach(function(el){
     el.addEventListener("click",function(ev){
       var a=el.getAttribute("data-act");
       if(a==="sheetBg"){if(ev.target===el){state.sheet=false;render();}return;}
+      if(a==="markBg"){if(ev.target===el){state.markSheet=false;render();}return;}
       if(a==="home"){state.view="cal";render();}
       else if(a==="pending"){state.view="pending";render();}
       else if(a==="search"){state.view="search";state.searchQ="";render();}
       else if(a==="settings"){state.sheet=true;render();}
       else if(a==="sheetClose"){state.sheet=false;render();}
+      else if(a==="markDay"){state.markSheet=true;render();}
+      else if(a==="markClose"){state.markSheet=false;render();}
+      else if(a==="markPick")setDayMark(el.getAttribute("data-mark"));
+      else if(a==="markClear")setDayMark("");
       else if(a==="export"){doExport();}
       else if(a==="import"){document.getElementById("importInput").click();}
       else if(a==="prevM")shiftMonth(-1);
@@ -899,7 +953,6 @@ function bind(){
       saveEditorRange();refreshEditorState();
     });
     ed.addEventListener("paste",function(){setTimeout(function(){ed.innerHTML=sanitizeHTML(ed.innerHTML);refreshEditorState();},0);});
-    ed.addEventListener("keydown",function(ev){if(ev.key==="Enter"&&!ev.shiftKey&&!document.queryCommandState("insertUnorderedList")&&!document.queryCommandState("insertOrderedList")){ev.preventDefault();addEntry();}});
   }
   var ps=document.querySelector("#projSel");
   if(ps)ps.addEventListener("change",function(){state.draftProj=ps.value;});
